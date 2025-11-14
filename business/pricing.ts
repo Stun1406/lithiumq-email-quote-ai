@@ -13,7 +13,7 @@ export interface PricingInput {
   extraHours?: number;
 }
 
-export function calculateTransloadCost(data: PricingInput) {
+export function calculateTransloadingCost(data: PricingInput) {
   let baseCost = 0;
   const { containerSize, palletized, pieces } = data;
 
