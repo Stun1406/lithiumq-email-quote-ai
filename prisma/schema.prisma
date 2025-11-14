@@ -1,15 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+model Email {
+  id             String      @id
+  senderEmail    String?
+  senderName     String?
+  subject        String?
+  body           String
+  extractedJson  Json?
+  normalizedJson Json?
+  inferredJson   Json?
+  quoteJson      Json?
+  aiResponse     String?
+  status         EmailStatus @default(received)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  logs           EmailLog[]
+
+  @@index([createdAt])
 }
 
-model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
+model EmailLog {
+  id        String   @id
+  emailId   String
+  type      LogType
+  message   String
   createdAt DateTime @default(now())
+  email     Email    @relation(fields: [emailId], references: [id])
+
+  @@index([emailId])
+}
+
+enum EmailStatus {
+  received
+  needs_clarification
+  quoted
+  awaiting_confirmation
+  confirmed
+  closed
+}
+
+enum LogType {
+  extraction
+  normalization
+  costing
+  quote
+  clarification
+  confirmation
+  update
 }

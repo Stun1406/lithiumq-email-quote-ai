@@ -1,28 +1,30 @@
-"use client";
+import { prisma } from "@/lib/prisma";
+import InboxShell from "./InboxShell";
 
-import { useState } from "react";
-import { inboxData } from "./data";
-import EmailList from "./EmailList";
-import EmailViewer from "./EmailViewer";
-import ComposeSheet from "./ComposeSheet";
+export const revalidate = 0;
 
-export default function InboxPage() {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export default async function InboxPage() {
+  // fetch persisted emails from DB
+  const rows = await prisma.email.findMany({
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      senderEmail: true,
+      senderName: true,
+      subject: true,
+      body: true,
+      createdAt: true,
+      status: true,
+    },
+  });
 
-  const selectedEmail = inboxData.find((e) => e.id === selectedId) || null;
+  const emails = rows.map((r) => ({
+    id: String(r.id),
+    from: r.senderEmail || r.senderName || "unknown",
+    subject: r.subject || "(no subject)",
+    body: r.body || "",
+    date: r.createdAt.toISOString(),
+  }));
 
-  return (
-    <div className="flex h-full">
-      <EmailList
-        emails={inboxData}
-        selected={selectedId}
-        onSelect={setSelectedId}
-      />
-
-      <div className="flex flex-col flex-1">
-        <ComposeSheet />
-        <EmailViewer email={selectedEmail} />
-      </div>
-    </div>
-  );
+  return <InboxShell emails={emails} />;
 }

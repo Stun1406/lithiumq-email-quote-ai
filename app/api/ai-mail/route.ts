@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import OpenAI from "openai";
 import { calculateTransloadingCost } from "@/business/pricing";
+import { prisma } from "@/lib/prisma";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -51,13 +53,32 @@ ${emailText}
       input: extractionPrompt,
     });
 
-    const extractedRaw = extractionResponse.output[0].content[0].text;
+    // Helper: robustly pull the first text-like output from the Responses API
+    function extractTextFromResponse(res: any): string {
+      try {
+        if (!res || !Array.isArray(res.output)) return "";
+        for (const out of res.output) {
+          if (out.content && Array.isArray(out.content)) {
+            for (const chunk of out.content) {
+              if (typeof chunk.text === "string") return chunk.text;
+              if (typeof chunk === "string") return chunk;
+              // Some SDK shapes wrap text differently
+              if (chunk.type === "output_text" && typeof chunk.text === "string") return chunk.text;
+            }
+          }
+          // older shapes
+          if (typeof out.text === "string") return out.text;
+        }
+      } catch (e) {
+        // fallthrough
+      }
+      return "";
+    }
+
+    const extractedRaw = extractTextFromResponse(extractionResponse);
 
     // Clean up Markdown fences
-    const cleaned = extractedRaw
-      .replace(/```json/gi, "")
-      .replace(/```/g, "")
-      .trim();
+    const cleaned = extractedRaw.replace(/```json/gi, "").replace(/```/g, "").trim();
 
     let extractedAI;
     try {
@@ -70,7 +91,7 @@ ${emailText}
     // --------------------------------------------------
     // 2. Normalize AI output into your PricingInput format
     // --------------------------------------------------
-    const normalized = {
+  const normalized: Record<string, any> = {
       containerSize: extractedAI.container_size?.replace("ft", "") || null,
       palletized: extractedAI.palletized ?? null,
       pieces: extractedAI.quantity ?? null,
@@ -105,8 +126,8 @@ ${emailText}
     // --------------------------------------------------
     // 4. Missing required info AFTER inference
     // --------------------------------------------------
-    const required = ["containerSize", "palletized", "pieces"];
-    const missing = required.filter((key) => !normalized[key]);
+  const required = ["containerSize", "palletized", "pieces"];
+  const missing = required.filter((key) => !normalized[key]);
 
     if (missing.length > 0) {
       const clarificationEmail = `
@@ -166,13 +187,29 @@ ${JSON.stringify(cost, null, 2)}
       input: quotePrompt,
     });
 
-    const emailDraft = quoteResponse.output[0].content[0].text.trim();
+    const emailDraft = extractTextFromResponse(quoteResponse).trim();
 
     // --------------------------------------------------
-    // 7. Final response
+    // 7. Persist record and return
     // --------------------------------------------------
+    const id = randomUUID();
+    const created = await prisma.email.create({
+      data: {
+        id,
+        senderEmail: null,
+        senderName: null,
+        subject: null,
+        body: emailText,
+        extractedJson: extractedAI as any,
+        normalizedJson: normalized as any,
+        quoteJson: cost as any,
+        aiResponse: emailDraft,
+      },
+    });
+
     return NextResponse.json({
       status: "ok",
+      id: created.id,
       extracted: extractedAI,
       normalized,
       cost,
