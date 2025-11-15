@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import EmailList from "./EmailList";
-import EmailViewer from "./EmailViewer";
+import dynamic from "next/dynamic";
+const EmailViewer = dynamic(() => import("./EmailViewer"), { ssr: false });
 import ComposeSheet from "./ComposeSheet";
 
 type EmailRow = {
