@@ -12,6 +12,7 @@ export default async function InboxPage() {
       senderEmail: true,
       senderName: true,
       subject: true,
+  aiResponse: true,
       body: true,
       createdAt: true,
       status: true,
@@ -23,7 +24,8 @@ export default async function InboxPage() {
     from: r.senderEmail || r.senderName || "unknown",
     subject: r.subject || "(no subject)",
     body: r.body || "",
-    date: r.createdAt.toISOString(),
+  date: r.createdAt.toLocaleString(),
+  aiResponse: r.aiResponse || null,
   }));
 
   return <InboxShell emails={emails} />;

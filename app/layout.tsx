@@ -1,5 +1,6 @@
 import "./globals.css";
 import { ReactNode } from "react";
+import Link from "next/link";
 
 export const metadata = {
   title: "LithiumQ Email Quote AI",
@@ -18,18 +19,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </div>
 
           <nav className="flex-1 px-2 py-4 space-y-1">
-            <a href="/" className="block px-3 py-2 rounded hover:bg-gray-200">
-               Inbox
-            </a>
-            <a href="/ai" className="block px-3 py-2 rounded hover:bg-gray-200">
-               AI Breakdown
-            </a>
-            <a href="/logs" className="block px-3 py-2 rounded hover:bg-gray-200">
-               Logs
-            </a>
-            <a href="/quotes" className="block px-3 py-2 rounded hover:bg-gray-200">
-               Quotes
-            </a>
+            <Link href="/dashboard/inbox" className="block px-3 py-2 rounded hover:bg-gray-200">Inbox</Link>
+            <Link href="/dashboard/ai-inspector" className="block px-3 py-2 rounded hover:bg-gray-200">AI Breakdown</Link>
+            <Link href="/dashboard/logs" className="block px-3 py-2 rounded hover:bg-gray-200">Logs</Link>
+            <Link href="/dashboard/pricing-rules" className="block px-3 py-2 rounded hover:bg-gray-200">Quotes</Link>
           </nav>
 
           <div className="px-4 py-4 border-t text-xs text-gray-500">

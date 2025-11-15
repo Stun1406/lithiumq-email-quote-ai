@@ -22,3 +22,4 @@ export async function GET() {
     return NextResponse.json({ error: err?.message || String(err) }, { status: 500 });
   }
 }
+

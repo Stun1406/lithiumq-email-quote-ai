@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +24,7 @@ export default function ComposeSheet() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiMailResponse | null>(null);
+  const router = useRouter();
 
   async function sendEmail() {
     setError(null);
@@ -30,7 +32,9 @@ export default function ComposeSheet() {
     setLoading(true);
     try {
       const payload = {
-        emailText: `To: ${to}\nSubject: ${subject}\n\n${body}`,
+        emailText: body,
+        senderEmail: to,
+        subject,
       };
 
       const res = await fetch(`/api/ai-mail`, {
@@ -46,9 +50,17 @@ export default function ComposeSheet() {
       } else {
         setResult(json);
 
-        // fetch latest saved emails so inbox list can be refreshed elsewhere
+        // ensure the server has finished persisting and then notify inbox
         try {
           await fetch(`/api/emails`);
+        } catch (e) {
+          // ignore
+        }
+
+        try {
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("emails:updated", { detail: { id: (json as any).id } }));
+          }
         } catch (e) {
           // ignore
         }

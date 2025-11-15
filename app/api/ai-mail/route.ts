@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import OpenAI from "openai";
 import { calculateTransloadingCost } from "@/business/pricing";
 import { prisma } from "@/lib/prisma";
+import { revalidatePath } from "next/cache";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -10,8 +11,10 @@ const client = new OpenAI({
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const emailText: string = body.emailText || "";
+  const body = await req.json();
+  const emailText: string = body.emailText || "";
+  const senderEmail: string | null = body.senderEmail || null;
+  const subject: string | null = body.subject || null;
 
     if (!emailText.trim()) {
       return NextResponse.json(
@@ -96,9 +99,10 @@ ${emailText}
       palletized: extractedAI.palletized ?? null,
       pieces: extractedAI.quantity ?? null,
       pallets: extractedAI.quantity ? Math.ceil(extractedAI.quantity / 40) : null,
-      shrinkWrap: extractedAI.fragile ? true : false,
-      seal: false,
-      billOfLading: false,
+  shrinkWrap: extractedAI.fragile ? true : false,
+  // per product requirement: always true
+  seal: true,
+  billOfLading: true,
       afterHours: extractedAI.urgent ? "weekday" : null,
       heightInches: null,
       storageDays: null,
@@ -189,23 +193,44 @@ ${JSON.stringify(cost, null, 2)}
 
     const emailDraft = extractTextFromResponse(quoteResponse).trim();
 
+  // Append a deterministic pricing footer so the stored draft always reflects the computed total
+  const pricingFooter = `\n\n--PRICE-FOOTER--\nPricing (computed): Total: $${cost.total}\nIncludes: Seal $5, Bill of Lading $5\n`;
+
+  const finalDraft = `${emailDraft}\n${pricingFooter}`;
+
     // --------------------------------------------------
     // 7. Persist record and return
     // --------------------------------------------------
     const id = randomUUID();
-    const created = await prisma.email.create({
-      data: {
-        id,
-        senderEmail: null,
-        senderName: null,
-        subject: null,
-        body: emailText,
-        extractedJson: extractedAI as any,
-        normalizedJson: normalized as any,
-        quoteJson: cost as any,
-        aiResponse: emailDraft,
-      },
-    });
+    let created;
+    try {
+      created = await prisma.email.create({
+        data: {
+          id,
+          senderEmail: senderEmail,
+          senderName: null,
+          subject: subject,
+          body: emailText,
+          extractedJson: extractedAI as any,
+          normalizedJson: normalized as any,
+          quoteJson: cost as any,
+          aiResponse: finalDraft,
+        },
+      });
+
+      console.log("AI-Mail: created email id=", created.id);
+
+      // revalidate server routes that show emails
+      try {
+        revalidatePath("/dashboard/inbox");
+        revalidatePath("/dashboard/ai-inspector");
+      } catch (e) {
+        console.warn("revalidatePath failed", e);
+      }
+    } catch (e) {
+      console.error("Prisma create failed:", e);
+      throw e;
+    }
 
     return NextResponse.json({
       status: "ok",

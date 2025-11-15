@@ -35,8 +35,9 @@ export function calculateTransloadingCost(data: PricingInput) {
   // Accessorial charges
   let accessories = 0;
   if (data.shrinkWrap) accessories += (data.pallets ?? 0) * 15;
-  if (data.seal) accessories += 5;
-  if (data.billOfLading) accessories += 5;
+  // Product rule: always include seal and bill of lading fees ($5 each)
+  accessories += 5; // seal
+  accessories += 5; // bill of lading
 
   // Handling
   let handling = (data.pallets ?? 0) * 22;

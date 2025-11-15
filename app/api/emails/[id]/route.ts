@@ -6,7 +6,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const { id } = await context.params;
 
     const email = await prisma.email.findUnique({
-      where: { id: Number(id) },
+      where: { id },
       include: { logs: { orderBy: { createdAt: "asc" } } },
     });
 
@@ -25,7 +25,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     const data = await req.json();
 
     const updated = await prisma.email.update({
-      where: { id: Number(id) },
+      where: { id },
       data,
     });
 
