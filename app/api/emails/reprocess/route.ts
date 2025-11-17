@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { calculateTransloadingCost } from "@/business/pricing";
+import {
+  buildPricingTermsText,
+  PRICING_TERMS,
+} from "@/business/pricing-data";
 import { revalidatePath } from "next/cache";
 
 export async function POST(req: Request) {
@@ -33,13 +37,22 @@ export async function POST(req: Request) {
       }
 
       // also append a deterministic pricing footer to existing aiResponse or create a minimal draft
-      const footer = `\n\n--PRICE-FOOTER--\nPricing (computed): Total: $${cost.total}\nIncludes: Seal $5, Bill of Lading $5\n`;
+      const pricingTerms = buildPricingTermsText();
+      const sealText = PRICING_TERMS["ACCESSORIAL CHARGES"]["Seal"];
+      const bolText = PRICING_TERMS["ACCESSORIAL CHARGES"]["Bill of Lading"];
+      const footer = `\n\n--PRICE-FOOTER--\nPricing (computed): Total: $${cost.total.toFixed(
+        2
+      )}\nIncludes: Seal ${sealText}, Bill of Lading ${bolText}\n`;
       const existing = (row as any).aiResponse || '';
       const newDraft = existing ? `${existing}\n${footer}` : `Automated quote generated.\n${footer}`;
 
       await prisma.email.update({
         where: { id: row.id },
-        data: { normalizedJson: normalized as any, quoteJson: cost as any, aiResponse: newDraft },
+        data: {
+          normalizedJson: normalized as any,
+          quoteJson: { ...cost, pricingTerms },
+          aiResponse: newDraft,
+        },
       });
 
       updated++;

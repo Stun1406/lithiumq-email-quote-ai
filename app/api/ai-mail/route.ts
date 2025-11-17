@@ -2,8 +2,13 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import OpenAI from "openai";
 import { calculateTransloadingCost } from "@/business/pricing";
+import {
+  buildPricingTermsText,
+  PRICING_TERMS,
+} from "@/business/pricing-data";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { applyPricingHeuristics } from "@/lib/pricing-heuristics";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -127,6 +132,8 @@ ${emailText}
       normalized.pallets = Math.ceil(normalized.pieces / 40);
     }
 
+    applyPricingHeuristics(emailText, normalized);
+
     // --------------------------------------------------
     // 4. Missing required info AFTER inference
     // --------------------------------------------------
@@ -186,15 +193,23 @@ Pricing:
 ${JSON.stringify(cost, null, 2)}
 `;
 
+    const pricingTerms = buildPricingTermsText();
+
+    // Ask the model to produce the quote and ensure the model uses the pricing terms
+    // in its reasoning, but do NOT append the full PRICING TERMS block to the stored draft
     const quoteResponse = await client.responses.create({
       model: "gpt-4.1-mini",
-      input: quotePrompt,
+      input: `${quotePrompt}\n\n${pricingTerms}\n\nNote to assistant: use the authoritative pricing rules internally (do not append the entire pricing terms block to the customer-facing email).`,
     });
 
     const emailDraft = extractTextFromResponse(quoteResponse).trim();
 
-  // Append a deterministic pricing footer so the stored draft always reflects the computed total
-  const pricingFooter = `\n\n--PRICE-FOOTER--\nPricing (computed): Total: $${cost.total}\nIncludes: Seal $5, Bill of Lading $5\n`;
+    // Append a deterministic pricing footer so the stored draft always reflects the computed total
+    const sealText = PRICING_TERMS["ACCESSORIAL CHARGES"]["Seal"];
+    const bolText = PRICING_TERMS["ACCESSORIAL CHARGES"]["Bill of Lading"];
+    const pricingFooter = `\n\n--PRICE-FOOTER--\nPricing (computed): Total: $${cost.total.toFixed(
+      2
+    )}\nIncludes: Seal ${sealText}, Bill of Lading ${bolText}\n`;
 
   const finalDraft = `${emailDraft}\n${pricingFooter}`;
 
@@ -213,7 +228,7 @@ ${JSON.stringify(cost, null, 2)}
           body: emailText,
           extractedJson: extractedAI as any,
           normalizedJson: normalized as any,
-          quoteJson: cost as any,
+          quoteJson: { ...cost, pricingTerms } as any,
           aiResponse: finalDraft,
         },
       });

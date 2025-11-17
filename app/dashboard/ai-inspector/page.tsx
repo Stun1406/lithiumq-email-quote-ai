@@ -1,5 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { calculateTransloadingCost } from "@/business/pricing";
+import PricingBreakdownTable, {
+	PricingQuote,
+} from "@/components/PricingBreakdownTable";
+import { splitAiQuoteResponse } from "@/lib/aiResponse";
+import {
+	getPricingJsonString,
+	PRICING_TERMS_NAME,
+} from "@/business/pricing-data";
 
 export const revalidate = 0;
 
@@ -44,6 +52,10 @@ export default async function AiInspectorPage({
 		computeError = err?.message || String(err);
 	}
 
+	const quote = (email.quoteJson ?? null) as PricingQuote | null;
+	const { body: quoteBody, pricingNote } = splitAiQuoteResponse(email.aiResponse);
+	const pricingTermsJson = getPricingJsonString();
+
 	return (
 		// page container: allow vertical scrolling so large JSON/pricing sections can be viewed
 		<div className="p-8 overflow-y-auto h-full">
@@ -86,7 +98,20 @@ export default async function AiInspectorPage({
 
 			<div>
 				<div className="font-medium">AI drafted quote</div>
-				<pre className="bg-gray-50 p-3 rounded mt-2 text-sm">{email.aiResponse || "(no draft)"}</pre>
+				<pre className="bg-gray-50 p-3 rounded mt-2 text-sm max-h-[40vh] overflow-auto">
+					{quoteBody || "(no draft)"}
+				</pre>
+
+				<div className="mt-4">
+					<div className="font-medium text-sm mb-2">Pricing summary</div>
+					<PricingBreakdownTable quote={quote} note={pricingNote} />
+					<div className="mt-4">
+						<div className="font-medium text-sm mb-2">{PRICING_TERMS_NAME}</div>
+						<pre className="bg-gray-50 p-3 rounded text-xs whitespace-pre-wrap max-h-[30vh] overflow-auto">
+							{pricingTermsJson}
+						</pre>
+					</div>
+				</div>
 			</div>
 		</div>
 	);
