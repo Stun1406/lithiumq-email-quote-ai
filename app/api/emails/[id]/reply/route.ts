@@ -18,6 +18,19 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     const email = await prisma.email.findUnique({ where: { id } });
     if (!email) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
+    const normalized = (email.normalizedJson || {}) as any;
+    const quoteJson = (email.quoteJson || {}) as any;
+    const serviceType: "transloading" | "drayage" =
+      (normalized?.serviceType ||
+        quoteJson?.serviceType ||
+        "transloading") === "drayage"
+        ? "drayage"
+        : "transloading";
+    const serviceHint =
+      serviceType === "drayage"
+        ? `Use drayage terminology (e.g., pier pass, chassis split, empty storage, terminal waiting time). If clarifying costs, mention whether the charge is a quote add-on or an invoice-only charge when applicable.`
+        : `Use transloading terminology and keep references to pallets/handling consistent with warehouse operations.`;
+
     // Build prompt: include original email, prior AI draft, and the user follow-up
     const prompt = `
 You are a logistics quoting assistant. A customer sent this inquiry:
@@ -28,9 +41,17 @@ The assistant previously generated this quote/draft:
 
 ${email.aiResponse || "(no prior draft)"}
 
+${
+  serviceType === "drayage"
+    ? "This engagement is a DRAYAGE quote. Maintain drayage-specific context (container size, weight brackets, drayage accessorials, invoice vs. quote-only charges)."
+    : "This engagement is a TRANSLOADING quote. Keep the focus on warehouse handling, pallets, and related services."
+}
+
 A user (internal) asks the assistant to clarify or expand on the draft with the following message:
 
 ${userMessage}
+
+${serviceHint}
 
 Reply concisely and professionally, focusing only on the requested clarification or additional details. Return only the plain text reply.
 `;

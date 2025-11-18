@@ -24,6 +24,16 @@ export default async function EmailDetailPage({
 
   if (!email) return notFound();
   const quote = (email.quoteJson ?? null) as PricingQuote | null;
+  const normalized = (email.normalizedJson ?? {}) as any;
+  const serviceType =
+    normalized?.serviceType ||
+    (quote as any)?.serviceType ||
+    "transloading";
+  const drayageMeta =
+    normalized?.drayage ||
+    (quote as any)?.metadata ||
+    email.inferredJson?.drayage ||
+    null;
   const { body: aiQuoteBody, pricingNote } = splitAiQuoteResponse(
     email.aiResponse
   );
@@ -42,13 +52,59 @@ export default async function EmailDetailPage({
       <Card>
         <CardHeader>
           <CardTitle>{email.subject || "No Subject"}</CardTitle>
-          <p className="text-sm text-gray-500">From: {email.senderName || email.senderEmail}</p>
-          <Badge className="mt-2 capitalize">{email.status}</Badge>
+          <p className="text-sm text-gray-500">
+            From: {email.senderName || email.senderEmail}
+          </p>
+          <div className="flex items-center gap-2 mt-2">
+            <Badge className="capitalize">{email.status}</Badge>
+            <Badge variant={serviceType === "drayage" ? "default" : "outline"}>
+              {serviceType === "drayage" ? "Drayage" : "Transloading"}
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent>
           <p className="whitespace-pre-wrap">{email.body}</p>
         </CardContent>
       </Card>
+
+      {serviceType === "drayage" && drayageMeta && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm uppercase text-blue-700">
+              Drayage Summary
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <Info label="Container">
+              {drayageMeta.containerSize ||
+                drayageMeta.container_size ||
+                "—"}
+            </Info>
+            <Info label="Weight (lbs)">
+              {drayageMeta.containerWeightLbs ||
+                drayageMeta.container_weight_lbs ||
+                "—"}
+            </Info>
+            <Info label="Miles">
+              {drayageMeta.miles || drayageMeta.miles_to_travel || "—"}
+            </Info>
+            <Info label="Ship-by">
+              {drayageMeta.shipByDate ||
+                drayageMeta.ship_by_date ||
+                drayageMeta.requested_ship_by ||
+                "—"}
+            </Info>
+            <Info label="Origin">
+              {drayageMeta.origin || drayageMeta.origin_city || "—"}
+            </Info>
+            <Info label="Destination">
+              {drayageMeta.destination ||
+                drayageMeta.destination_city ||
+                "—"}
+            </Info>
+          </CardContent>
+        </Card>
+      )}
 
       <Separator />
 
@@ -139,6 +195,15 @@ export default async function EmailDetailPage({
           ))}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function Info({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs uppercase text-gray-500">{label}</span>
+      <span className="text-sm text-gray-900">{children}</span>
     </div>
   );
 }

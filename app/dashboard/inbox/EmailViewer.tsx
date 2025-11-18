@@ -7,6 +7,7 @@ import PricingBreakdownTable, {
   PricingQuote,
 } from "@/components/PricingBreakdownTable";
 import { splitAiQuoteResponse } from "@/lib/aiResponse";
+import { Badge } from "@/components/ui/badge";
 
 interface Props {
   email: (Email & { aiResponse?: string | null }) | null;
@@ -53,14 +54,65 @@ export default function EmailViewer({ email }: Props) {
 
   const aiResponse = details?.aiResponse ?? email.aiResponse;
   const quote = (details?.quoteJson ?? null) as PricingQuote | null;
+  const normalized = details?.normalizedJson ?? null;
+  const inferred = details?.inferredJson ?? null;
+  const serviceType =
+    normalized?.serviceType ||
+    (quote as any)?.serviceType ||
+    "transloading";
+  const drayageMeta =
+    normalized?.drayage ||
+    (quote as any)?.metadata ||
+    inferred?.drayage ||
+    null;
   const { body: aiQuoteBody, pricingNote } = splitAiQuoteResponse(aiResponse);
 
   return (
     <div className="flex-1 p-8 overflow-y-auto">
       <h2 className="text-xl font-bold">{email.subject}</h2>
-      <p className="text-sm text-gray-500 mt-1">{email.from}</p>
+      <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
+        <span>{email.from}</span>
+        <Badge variant={serviceType === "drayage" ? "default" : "outline"}>
+          {serviceType === "drayage" ? "Drayage" : "Transloading"}
+        </Badge>
+      </div>
       <hr className="my-4" />
       <p className="text-gray-800 whitespace-pre-wrap">{email.body}</p>
+
+      {serviceType === "drayage" && drayageMeta && (
+        <div className="mt-4 bg-blue-50 border border-blue-100 rounded p-4 text-sm text-blue-900">
+          <div className="font-semibold text-xs uppercase tracking-wide mb-2">
+            Drayage Summary
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <InfoRow label="Container">
+              {drayageMeta.containerSize || drayageMeta.container_size || "—"}
+            </InfoRow>
+            <InfoRow label="Weight">
+              {drayageMeta.containerWeightLbs ||
+                drayageMeta.container_weight_lbs ||
+                "—"}
+            </InfoRow>
+            <InfoRow label="Miles">
+              {drayageMeta.miles || drayageMeta.miles_to_travel || "—"}
+            </InfoRow>
+            <InfoRow label="Ship by">
+              {drayageMeta.shipByDate ||
+                drayageMeta.ship_by_date ||
+                drayageMeta.requested_ship_by ||
+                "—"}
+            </InfoRow>
+            <InfoRow label="Origin">
+              {drayageMeta.origin || drayageMeta.origin_city || "—"}
+            </InfoRow>
+            <InfoRow label="Destination">
+              {drayageMeta.destination ||
+                drayageMeta.destination_city ||
+                "—"}
+            </InfoRow>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6">
         <Link
@@ -126,6 +178,23 @@ export default function EmailViewer({ email }: Props) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function InfoRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs uppercase text-blue-700 font-medium">
+        {label}
+      </span>
+      <span className="text-sm text-blue-900">{children}</span>
     </div>
   );
 }

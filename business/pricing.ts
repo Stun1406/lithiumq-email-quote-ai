@@ -18,6 +18,67 @@ export interface PricingInput {
   extraHours?: number;
 }
 
+export interface PricingLineItem {
+  label: string;
+  amount: number;
+  category?: string;
+  unit?: string | null;
+  quantity?: number | null;
+}
+
+export interface DrayageQuoteInput {
+  containerSize?: string | null;
+  containerWeightLbs?: number | null;
+  miles?: number | null;
+  origin?: string | null;
+  destination?: string | null;
+  shipByDate?: string | null;
+  urgent?: boolean | null;
+  urgentWithin48Hours?: boolean | null;
+  lfdHoursNotice?: number | null;
+  extraStops?: number | null;
+  emptyStorageDays?: number | null;
+  storageDays?: number | null;
+  prepullRequired?: boolean | null;
+  chassisSplitRequired?: boolean | null;
+  prepaidPierPass?: boolean | null;
+  tcfCharges?: boolean | null;
+  terminalDryRun?: boolean | null;
+  reefer?: boolean | null;
+  hazmat?: boolean | null;
+  chassisDays?: number | null;
+  chassisType?: "standard" | "wccp" | null;
+  terminalWaitingHours?: number | null;
+  liveUnloadHours?: number | null;
+  examinationRequired?: boolean | null;
+  replugRequired?: boolean | null;
+  deliveryOrderCancellation?: boolean | null;
+  onTimeDelivery?: boolean | null;
+  failedDeliveryCityRate?: number | null;
+}
+
+export interface DrayageQuoteResult {
+  serviceType: "drayage";
+  total: number;
+  lineItems: PricingLineItem[];
+  invoiceItems: PricingLineItem[];
+  metadata: {
+    containerSize?: string | null;
+    containerWeightLbs?: number | null;
+    weightBracket?: string | null;
+    chargedMiles?: number | null;
+    requestedMiles?: number | null;
+    ratePerMile?: number | null;
+    origin?: string | null;
+    destination?: string | null;
+    shipByDate?: string | null;
+    extraStops?: number | null;
+    emptyStorageDays?: number | null;
+    storageDays?: number | null;
+    urgent?: boolean | null;
+  };
+}
+
 const LOOSE_KEYS = [
   "Loose cargo 1-500 pcs",
   "Loose cargo 501-1000 pcs",
@@ -137,6 +198,25 @@ export function calculateTransloadingCost(data: PricingInput) {
   const total =
     baseCost + accessories + handling + afterHoursFee + storage + labor;
 
+  const lineItems: PricingLineItem[] = [
+    { label: "Base transloading", amount: baseCost, category: "base" },
+  ];
+  if (accessories > 0) {
+    lineItems.push({ label: "Accessories", amount: accessories, category: "accessories" });
+  }
+  if (handling > 0) {
+    lineItems.push({ label: "Handling", amount: handling, category: "handling" });
+  }
+  if (afterHoursFee > 0) {
+    lineItems.push({ label: "After-hours fee", amount: afterHoursFee, category: "afterHours" });
+  }
+  if (storage > 0) {
+    lineItems.push({ label: "Storage", amount: storage, category: "storage" });
+  }
+  if (labor > 0) {
+    lineItems.push({ label: "Labor", amount: labor, category: "labor" });
+  }
+
   return {
     breakdown: {
       baseCost,
@@ -146,7 +226,212 @@ export function calculateTransloadingCost(data: PricingInput) {
       storage,
       labor,
     },
+    lineItems,
     total: parseFloat(total.toFixed(2)),
+  };
+}
+
+export function calculateDrayagePricing(
+  input: DrayageQuoteInput
+): DrayageQuoteResult {
+  const drayageTerms = (PRICING_TERMS as any).DRAYAGE;
+  if (!drayageTerms) {
+    throw new Error("Missing DRAYAGE configuration in pricing data");
+  }
+
+  const sizeKey = normalizeContainerSize(input.containerSize) ?? "40";
+  const basePerMileMap = drayageTerms.BASE_PER_MILE || {};
+  const perMileRaw =
+    basePerMileMap[sizeKey] ??
+    basePerMileMap["40"] ??
+    basePerMileMap["45"] ??
+    "$0";
+  const ratePerMile = extractDollarValue(perMileRaw);
+  const minMiles = Number(drayageTerms.MIN_MILES_CHARGE ?? 0) || 0;
+  const requestedMiles = Math.max(0, input.miles ?? 0);
+  const chargedMiles = Math.max(requestedMiles || minMiles, minMiles);
+  const baseAmount = parseFloat((ratePerMile * chargedMiles).toFixed(2));
+
+  const lineItems: PricingLineItem[] = [
+    {
+      label: `Base drayage (${sizeKey}' · ${chargedMiles} mi @ $${ratePerMile.toFixed(
+        2
+      )}/mi)`,
+      amount: baseAmount,
+      category: "base",
+      quantity: chargedMiles,
+      unit: "mile",
+    },
+  ];
+  let total = baseAmount;
+
+  const brackets = drayageTerms.WEIGHT_BRACKETS || [];
+  let bracketLabel: string | null = null;
+  if (input.containerWeightLbs) {
+    const bracket = pickWeightBracket(brackets, input.containerWeightLbs);
+    if (bracket) {
+      bracketLabel = bracket.label || null;
+      const surcharge = extractDollarValue(bracket.surcharge ?? "$0");
+      if (surcharge > 0) {
+        total += surcharge;
+        lineItems.push({
+          label: `Weight surcharge (${bracket.label})`,
+          amount: surcharge,
+          category: "weight",
+        });
+      }
+    }
+  }
+
+  const addOns = drayageTerms.QUOTE_ADDONS || {};
+  const addFlat = (key: string, enabled: boolean | null | undefined) => {
+    if (!enabled) return;
+    const cfg = addOns[key];
+    if (!cfg) return;
+    const amount = extractDollarValue(cfg.amount ?? "$0");
+    if (amount <= 0) return;
+    total += amount;
+    lineItems.push({
+      label: cfg.label,
+      amount,
+      category: "add-on",
+    });
+  };
+
+  if (input.prepaidPierPass) addFlat("prepaidPierPass", true);
+  if (input.tcfCharges) addFlat("tcfCharges", true);
+  if (input.chassisSplitRequired) addFlat("chassisSplit", true);
+  if (input.prepullRequired) addFlat("prepull", true);
+
+  const hotEligible =
+    input.urgent &&
+    (input.urgentWithin48Hours !== false ||
+      (input.lfdHoursNotice != null && input.lfdHoursNotice < 48));
+  if (hotEligible) addFlat("hotRush", true);
+
+  const addPerUnits = (
+    key: string,
+    units: number | null | undefined,
+    options?: { unitLabel?: string; freeUnits?: number }
+  ) => {
+    if (!units || units <= 0) return;
+    const cfg = addOns[key];
+    if (!cfg) return;
+    const amount = extractDollarValue(cfg.amount ?? "$0");
+    if (amount <= 0) return;
+    const freeUnits = options?.freeUnits ?? cfg.freeDays ?? 0;
+    const billableUnits = Math.max(0, units - (freeUnits || 0));
+    if (billableUnits <= 0) return;
+    const totalAmount = amount * billableUnits;
+    total += totalAmount;
+    lineItems.push({
+      label: `${cfg.label}${
+        freeUnits ? ` (after ${freeUnits} free)` : ""
+      }`,
+      amount: parseFloat(totalAmount.toFixed(2)),
+      category: "add-on",
+      unit: options?.unitLabel || cfg.per || "unit",
+      quantity: billableUnits,
+    });
+  };
+
+  addPerUnits("extraStop", input.extraStops, { unitLabel: "stop(s)" });
+  addPerUnits("emptyStorage", input.emptyStorageDays, { unitLabel: "day(s)" });
+  addPerUnits("storage", input.storageDays, { unitLabel: "day(s)" });
+
+  const invoiceItems: PricingLineItem[] = [];
+  const invoiceCfg = drayageTerms.INVOICE_ADDONS || {};
+  const addInvoiceFlat = (key: string, enabled?: boolean | null) => {
+    if (!enabled) return;
+    const cfg = invoiceCfg[key];
+    if (!cfg) return;
+    const amount = extractDollarValue(cfg.amount ?? "$0");
+    if (amount <= 0) return;
+    invoiceItems.push({
+      label: cfg.label,
+      amount,
+      category: "invoice",
+    });
+  };
+  const addInvoicePerUnits = (
+    key: string,
+    units?: number | null,
+    options?: { unitLabel?: string; freeUnits?: number; minUnits?: number }
+  ) => {
+    if (!units || units <= 0) return;
+    const cfg = invoiceCfg[key];
+    if (!cfg) return;
+    const amount = extractDollarValue(cfg.amount ?? "$0");
+    if (amount <= 0) return;
+    const minUnits = options?.minUnits ?? cfg.minDays ?? 0;
+    const normalizedUnits = Math.max(minUnits || 0, units);
+    const freeUnits = options?.freeUnits ?? cfg.freeHours ?? 0;
+    const billableUnits = Math.max(0, normalizedUnits - (freeUnits || 0));
+    if (billableUnits <= 0) return;
+    invoiceItems.push({
+      label: `${cfg.label}${
+        freeUnits ? ` (after ${freeUnits} free)` : ""
+      }`,
+      amount: parseFloat((amount * billableUnits).toFixed(2)),
+      unit: options?.unitLabel || cfg.per || "unit",
+      quantity: billableUnits,
+      category: "invoice",
+    });
+  };
+
+  addInvoiceFlat("terminalDryRun", input.terminalDryRun);
+  addInvoicePerUnits(
+    input.chassisType === "wccp" ? "chassisWccp" : "chassisStandard",
+    input.chassisDays,
+    { unitLabel: "day(s)" }
+  );
+  addInvoicePerUnits("terminalWaiting", input.terminalWaitingHours, {
+    unitLabel: "hour(s)",
+    freeUnits: invoiceCfg.terminalWaiting?.freeHours,
+  });
+  addInvoicePerUnits("liveUnload", input.liveUnloadHours, {
+    unitLabel: "hour(s)",
+    freeUnits: invoiceCfg.liveUnload?.freeHours,
+  });
+  addInvoiceFlat("examinationFee", input.examinationRequired);
+  addInvoiceFlat("replug", input.replugRequired);
+  addInvoiceFlat("doCancellation", input.deliveryOrderCancellation);
+  addInvoiceFlat("onTimeDelivery", input.onTimeDelivery);
+
+  if (input.failedDeliveryCityRate) {
+    const cfg = invoiceCfg.failedDelivery;
+    if (cfg) {
+      const amount = Math.max(0, (input.failedDeliveryCityRate ?? 0) - 100);
+      if (amount > 0) {
+        invoiceItems.push({
+          label: cfg.label,
+          amount: parseFloat(amount.toFixed(2)),
+          category: "invoice",
+        });
+      }
+    }
+  }
+
+  return {
+    serviceType: "drayage",
+    total: parseFloat(total.toFixed(2)),
+    lineItems,
+    invoiceItems,
+    metadata: {
+      containerSize: sizeKey,
+      containerWeightLbs: input.containerWeightLbs ?? null,
+      weightBracket: bracketLabel,
+      chargedMiles,
+      requestedMiles,
+      ratePerMile,
+      origin: input.origin ?? null,
+      destination: input.destination ?? null,
+      shipByDate: input.shipByDate ?? null,
+      extraStops: input.extraStops ?? null,
+      emptyStorageDays: input.emptyStorageDays ?? null,
+      storageDays: input.storageDays ?? null,
+      urgent: input.urgent ?? null,
+    },
   };
 }
 
@@ -194,5 +479,24 @@ function pickLooseTier(tiers: LooseTier[], pieces: number) {
         normalizedPieces >= tier.min &&
         (tier.max === null || normalizedPieces <= tier.max)
     ) ?? tiers[tiers.length - 1]
+  );
+}
+
+function normalizeContainerSize(value?: string | null) {
+  if (!value) return null;
+  const match = value.toString().match(/\d+/);
+  return match ? match[0] : null;
+}
+
+function pickWeightBracket(brackets: any[], weight: number) {
+  if (!Array.isArray(brackets)) return null;
+  return (
+    brackets.find((bracket) => {
+      const min = bracket.min ?? 0;
+      const max = bracket.max ?? null;
+      if (weight < min) return false;
+      if (max !== null && weight > max) return false;
+      return true;
+    }) || null
   );
 }

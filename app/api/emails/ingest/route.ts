@@ -1,8 +1,25 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import OpenAI from "openai";
-import { calculateTransloadingCost } from "@/business/pricing";
+import {
+  calculateTransloadingCost,
+  calculateDrayagePricing,
+} from "@/business/pricing";
 import { revalidatePath } from "next/cache";
+import {
+  deriveSenderContactDetails,
+  formatSenderContactBlock,
+} from "@/lib/contact-info";
+import {
+  determineServiceType,
+  buildDrayageInput,
+  validateDrayageInput,
+} from "@/lib/drayage";
+import { formatQuoteTable } from "@/lib/quote-table";
+import {
+  buildDrayageFooter,
+  buildTransloadingFooter,
+} from "@/lib/quote-format";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -46,25 +63,81 @@ export async function POST(req: Request) {
     // 2. AI Extraction
     // --------------------------------------------------------
     const extractionPrompt = `
-            const created = await prisma.email.create({
-              data: {
-                senderEmail: sender || "unknown",
-                subject,
-                body: content,
-              },
-            });
+Extract logistics shipment details from this email.
+
+Return ONLY valid JSON with:
+{
+  "quantity": number | null,
+  "palletized": boolean | null,
   "pallet_size": "40x48" | "48x48" | "euro" | null,
-  "container_size": "20ft" | "40ft" | "45ft" | null,
+  "container_size": "20ft" | "40ft" | "45ft" | "53ft" | null,
   "fragile": boolean | null,
   "temperature_controlled": boolean | null,
   "hazmat": boolean | null,
   "urgent": boolean | null,
+  "service_type": "transloading" | "drayage" | "both" | null,
   "origin": string | null,
   "destination": string | null,
-  "special_instructions": string | null
+  "special_instructions": string | null,
+  "requested_ship_by": string | null,
+  "container_weight_lbs": number | null,
+  "miles_to_travel": number | null,
+  "extra_stops": number | null,
+  "empty_storage_days": number | null,
+  "storage_days": number | null,
+  "prepull_required": boolean | null,
+  "chassis_split_required": boolean | null,
+  "prepaid_pier_pass": boolean | null,
+  "tcf_charges": boolean | null,
+  "terminal_dry_run": boolean | null,
+  "terminal_waiting_hours": number | null,
+  "live_unload_hours": number | null,
+  "chassis_days": number | null,
+  "chassis_type": string | null,
+  "examination_fee": boolean | null,
+  "replug_required": boolean | null,
+  "delivery_order_cancellation": boolean | null,
+  "on_time_delivery": boolean | null,
+  "failed_delivery_city_rate": number | null,
+  "contact_name": string | null,
+  "company_name": string | null,
+  "phone": string | null,
+  "email": string | null,
+  "drayage": {
+    "container_size": string | null,
+    "container_weight_lbs": number | null,
+    "miles": number | null,
+    "origin": string | null,
+    "destination": string | null,
+    "ship_by_date": string | null,
+    "urgent_within_48h": boolean | null,
+    "hours_before_lfd": number | null,
+    "extra_stops": number | null,
+    "empty_storage_days": number | null,
+    "storage_days": number | null,
+    "prepull_required": boolean | null,
+    "chassis_split_required": boolean | null,
+    "prepaid_pier_pass": boolean | null,
+    "tcf_charges": boolean | null,
+    "terminal_dry_run": boolean | null,
+    "chassis_days": number | null,
+    "chassis_type": string | null,
+    "terminal_waiting_hours": number | null,
+    "live_unload_hours": number | null,
+    "examination_fee": boolean | null,
+    "replug_required": boolean | null,
+    "delivery_order_cancellation": boolean | null,
+    "on_time_delivery": boolean | null,
+    "failed_delivery_city_rate": number | null,
+    "invoice": {
+      "terminal_waiting_hours": number | null,
+      "live_unload_hours": number | null,
+      "chassis_days": number | null
+    }
+  }
 }
 
-If any detail is not in the email, set it to null. Do NOT make up values.
+If any detail is missing, return null (do not guess).
 
 Email:
 ${body}
@@ -104,11 +177,26 @@ ${body}
 
     await addLog("normalization", JSON.stringify(normalized, null, 2));
 
+    const serviceType = determineServiceType(extractedJson, body);
+    const drayageInput = buildDrayageInput(extractedJson, normalized);
+    normalized.serviceType = serviceType;
+    normalized.drayage = drayageInput;
+
+    const contactDetails = deriveSenderContactDetails({
+      emailText: body,
+      senderEmail: sender,
+      extractedContact: extractedJson,
+    });
+
     // --------------------------------------------------------
     // 4. Missing fields check
     // --------------------------------------------------------
-    const required = ["containerSize", "palletized", "pieces"];
-    const missing = required.filter((k) => !normalized[k]);
+    const missing =
+      serviceType === "drayage"
+        ? validateDrayageInput(drayageInput)
+        : ["containerSize", "palletized", "pieces"].filter(
+            (k) => !normalized[k]
+          );
 
     if (missing.length > 0) {
       const clarificationEmail = `
@@ -116,7 +204,9 @@ Dear Customer,
 
 Thank you for your inquiry.
 
-To proceed with your quotation, could you please confirm:
+To proceed with your ${
+        serviceType === "drayage" ? "drayage" : "transloading"
+      } quotation, could you please confirm:
 
 Missing: ${missing.join(", ")}
 
@@ -126,36 +216,73 @@ Warm regards,
 LithiumQ Logistics Team
 `.trim();
 
+      const clarificationWithContact = `${clarificationEmail}\n\n${formatSenderContactBlock(
+        contactDetails
+      )}`;
+
       await prisma.email.update({
         where: { id: email.id },
         data: {
           status: "needs_clarification",
           extractedJson,
           normalizedJson: normalized,
-          aiResponse: clarificationEmail,
+          inferredJson: {
+            contactDetails,
+            drayage: drayageInput,
+          },
+          aiResponse: clarificationWithContact,
         },
       });
 
-      await addLog("clarification", clarificationEmail);
+      await addLog("clarification", clarificationWithContact);
 
       return NextResponse.json({
         status: "needs_clarification",
         missing,
-        clarificationEmail,
+        contactDetails,
+        clarificationEmail: clarificationWithContact,
       });
     }
 
     // --------------------------------------------------------
     // 5. Cost Calculation
     // --------------------------------------------------------
-    const cost = calculateTransloadingCost(normalized as any);
+    const transloadingCost =
+      serviceType === "drayage"
+        ? null
+        : calculateTransloadingCost(normalized as any);
+    const drayageQuote =
+      serviceType === "drayage"
+        ? calculateDrayagePricing(drayageInput)
+        : null;
 
-    await addLog("costing", JSON.stringify(cost, null, 2));
+    await addLog(
+      "costing",
+      JSON.stringify(drayageQuote ?? transloadingCost, null, 2)
+    );
 
-    // --------------------------------------------------------
-    // 6. Generate Quote Email
-    // --------------------------------------------------------
-    const quotePrompt = `
+    const quoteTable = formatQuoteTable(
+      serviceType === "drayage"
+        ? {
+            total: drayageQuote?.total,
+            lineItems: drayageQuote?.lineItems,
+            invoiceItems: drayageQuote?.invoiceItems,
+          }
+        : transloadingCost || undefined
+    );
+
+    const quotePrompt =
+      serviceType === "drayage"
+        ? `
+Write a professional drayage quotation email summarizing container size, weight bracket, origin, destination, miles, requested ship-by date, drayage add-ons, and invoice-only services (if provided). Include the computed drayage total and invite the customer to confirm or request adjustments.
+
+Shipment details:
+${JSON.stringify(drayageInput, null, 2)}
+
+Pricing breakdown:
+${JSON.stringify(drayageQuote, null, 2)}
+    `
+        : `
 Write a professional logistics quotation email summarizing the shipment details and including the final cost.
 
 Shipment details:
@@ -165,28 +292,48 @@ Internal normalized data:
 ${JSON.stringify(normalized, null, 2)}
 
 Pricing breakdown:
-${JSON.stringify(cost, null, 2)}
+${JSON.stringify(transloadingCost, null, 2)}
     `;
 
-  const quoteResponse = await client.responses.create({
+    const quoteResponse = await client.responses.create({
       model: "gpt-4.1-mini",
       input: quotePrompt,
     });
-  const aiEmailDraft = (quoteResponse as any).output?.[0]?.content?.[0]?.text?.trim() || "";
+    const aiEmailDraft =
+      (quoteResponse as any).output?.[0]?.content?.[0]?.text?.trim() || "";
 
-    await addLog("quote", aiEmailDraft);
+    const contactBlock = formatSenderContactBlock(contactDetails);
+    const pricingFooter =
+      serviceType === "drayage"
+        ? buildDrayageFooter(drayageQuote || undefined)
+        : buildTransloadingFooter(transloadingCost || undefined);
+    const finalDraft = [aiEmailDraft.trim(), quoteTable]
+      .filter(Boolean)
+      .join("\n\n")
+      .concat(`\n\n${contactBlock}${pricingFooter}`);
+
+    await addLog("quote", finalDraft);
 
     // --------------------------------------------------------
     // 7. Final DB update
     // --------------------------------------------------------
+    const quotePayload =
+      serviceType === "drayage"
+        ? { serviceType: "drayage", ...drayageQuote }
+        : { serviceType: "transloading", ...(transloadingCost || {}) };
+
     await prisma.email.update({
       where: { id: email.id },
       data: {
         status: "quoted",
         extractedJson,
         normalizedJson: normalized,
-        quoteJson: cost,
-        aiResponse: aiEmailDraft,
+        quoteJson: quotePayload,
+        inferredJson: {
+          contactDetails,
+          drayage: drayageInput,
+        },
+        aiResponse: finalDraft,
       },
     });
 
@@ -202,8 +349,11 @@ ${JSON.stringify(cost, null, 2)}
       emailId: email.id,
       extractedJson,
       normalized,
-      cost,
-      aiEmailDraft,
+      ...(serviceType === "drayage"
+        ? { drayageQuote }
+        : { cost: transloadingCost }),
+      contactDetails,
+      aiEmailDraft: finalDraft,
     });
   } catch (err: any) {
     console.error("ERROR INGESTING EMAIL:", err);

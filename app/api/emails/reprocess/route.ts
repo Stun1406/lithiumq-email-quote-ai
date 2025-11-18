@@ -1,56 +1,93 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { calculateTransloadingCost } from "@/business/pricing";
 import {
-  buildPricingTermsText,
-  PRICING_TERMS,
-} from "@/business/pricing-data";
+  calculateTransloadingCost,
+  calculateDrayagePricing,
+} from "@/business/pricing";
 import { revalidatePath } from "next/cache";
+import {
+  determineServiceType,
+  buildDrayageInput,
+  validateDrayageInput,
+} from "@/lib/drayage";
+import { buildDrayageFooter, buildTransloadingFooter } from "@/lib/quote-format";
+import { formatSenderContactBlock } from "@/lib/contact-info";
+import { applyPricingHeuristics } from "@/lib/pricing-heuristics";
 
 export async function POST(req: Request) {
   try {
     // fetch existing emails with any stored normalized/inferred JSON
     const rows = await prisma.email.findMany({
-      select: { id: true, normalizedJson: true, inferredJson: true },
+      select: {
+        id: true,
+        normalizedJson: true,
+        inferredJson: true,
+        extractedJson: true,
+        aiResponse: true,
+        senderEmail: true,
+        body: true,
+      },
     });
 
     let updated = 0;
 
     for (const row of rows) {
-      const stored = (row.normalizedJson ?? row.inferredJson) as any;
-
-      // ensure seal and billOfLading are true per product rule
-      const normalized = {
-        ...stored,
-        seal: stored?.seal ?? true,
-        billOfLading: stored?.billOfLading ?? true,
-      };
-
-      // compute cost (pricing function expects the normalized shape)
-      let cost: any = null;
-      try {
-        cost = calculateTransloadingCost(normalized as any);
-      } catch (e) {
-        console.warn("Pricing compute failed for", row.id, e);
-        // skip updating this one
-        continue;
+      const stored = row.normalizedJson ?? row.inferredJson ?? {};
+      const normalized: any = { ...stored };
+      let serviceType =
+        normalized.serviceType ||
+        determineServiceType(row.extractedJson ?? {}, row.body || "");
+      if (!serviceType || serviceType === "both") serviceType = "transloading";
+      normalized.serviceType = serviceType;
+      if (serviceType !== "drayage") {
+        normalized.seal = normalized.seal ?? true;
+        normalized.billOfLading = normalized.billOfLading ?? true;
       }
 
-      // also append a deterministic pricing footer to existing aiResponse or create a minimal draft
-      const pricingTerms = buildPricingTermsText();
-      const sealText = PRICING_TERMS["ACCESSORIAL CHARGES"]["Seal"];
-      const bolText = PRICING_TERMS["ACCESSORIAL CHARGES"]["Bill of Lading"];
-      const footer = `\n\n--PRICE-FOOTER--\nPricing (computed): Total: $${cost.total.toFixed(
-        2
-      )}\nIncludes: Seal ${sealText}, Bill of Lading ${bolText}\n`;
-      const existing = (row as any).aiResponse || '';
-      const newDraft = existing ? `${existing}\n${footer}` : `Automated quote generated.\n${footer}`;
+      const drayageInput = buildDrayageInput(row.extractedJson ?? {}, normalized);
+      normalized.drayage = drayageInput;
+
+      let quoteJson: any;
+      if (serviceType === "drayage") {
+        const missing = validateDrayageInput(drayageInput);
+        if (missing.length > 0) continue;
+        try {
+          quoteJson = calculateDrayagePricing(drayageInput);
+        } catch (e) {
+          console.warn("Drayage pricing failed for", row.id, e);
+          continue;
+        }
+      } else {
+        applyPricingHeuristics(row.body || "", normalized);
+        try {
+          quoteJson = {
+            serviceType: "transloading",
+            ...calculateTransloadingCost(normalized),
+          };
+        } catch (e) {
+          console.warn("Pricing compute failed for", row.id, e);
+          continue;
+        }
+      }
+
+      const footer =
+        serviceType === "drayage"
+          ? buildDrayageFooter(quoteJson)
+          : buildTransloadingFooter(quoteJson);
+      const contactBlock = formatSenderContactBlock({
+        name: "Customer Contact",
+        company: "LithiumQ",
+        phone: "(555) 010-0000",
+        email: row.senderEmail || "unknown@lithiumq.com",
+      });
+      const existing = row.aiResponse || "";
+      const newDraft = `${existing}\n\n${contactBlock}${footer}`.trim();
 
       await prisma.email.update({
         where: { id: row.id },
         data: {
           normalizedJson: normalized as any,
-          quoteJson: { ...cost, pricingTerms },
+          quoteJson,
           aiResponse: newDraft,
         },
       });

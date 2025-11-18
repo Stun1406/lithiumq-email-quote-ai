@@ -36,6 +36,42 @@
       "Monthly storage per pallet (40x48x60 and under)": "$22.00",
       "Monthly storage per pallet (40x48x61 and over)": "$34.00",
       "Monthly storage per square feet used": "$2.45"
+    },
+    "DRAYAGE": {
+      "BASE_PER_MILE": {
+        "20": "$3.25",
+        "40": "$3.75",
+        "45": "$3.95",
+        "53": "$4.10"
+      },
+      "MIN_MILES_CHARGE": 50,
+      "WEIGHT_BRACKETS": [
+        { "label": "43k-47k lbs", "min": 43000, "max": 47000, "surcharge": "$250.00" },
+        { "label": "47k-50k lbs", "min": 47000, "max": 50000, "surcharge": "$350.00" },
+        { "label": "50k+ lbs", "min": 50000, "max": null, "surcharge": "$400.00" }
+      ],
+      "QUOTE_ADDONS": {
+        "prepaidPierPass": { "label": "Prepaid Pier pass charges", "amount": "$80.00" },
+        "tcfCharges": { "label": "TCF charges", "amount": "$20.00" },
+        "chassisSplit": { "label": "Chassis Split required", "amount": "$100.00" },
+        "hotRush": { "label": "Hot/Urgent rush fee", "amount": "$200.00" },
+        "emptyStorage": { "label": "Empty Storage", "amount": "$50.00", "per": "day", "freeDays": 2 },
+        "extraStop": { "label": "Extra stop requirement", "amount": "$50.00", "per": "stop" },
+        "storage": { "label": "Storage", "amount": "$50.00", "per": "day", "freeDays": 2 },
+        "prepull": { "label": "Prepull required", "amount": "$150.00" }
+      },
+      "INVOICE_ADDONS": {
+        "terminalDryRun": { "label": "Terminal Dry Run", "amount": "$10.00" },
+        "failedDelivery": { "label": "Failed delivery charges", "formula": "destinationRateMinus100" },
+        "chassisStandard": { "label": "Chassis (standard)", "amount": "$45.00", "per": "day", "minDays": 2 },
+        "chassisWccp": { "label": "Chassis (WCCP 5-15 days)", "amount": "$75.00", "per": "day", "minDays": 5 },
+        "terminalWaiting": { "label": "Terminal waiting time", "amount": "$65.00", "per": "hour", "freeHours": 1 },
+        "liveUnload": { "label": "Live unload", "amount": "$85.00", "per": "hour", "freeHours": 1 },
+        "examinationFee": { "label": "Examination fees", "amount": "$250.00" },
+        "replug": { "label": "Re-plug in", "amount": "$85.00" },
+        "doCancellation": { "label": "Delivery Order cancellation", "amount": "$50.00" },
+        "onTimeDelivery": { "label": "On-time delivery service", "amount": "$150.00" }
+      }
     }
   }
 }

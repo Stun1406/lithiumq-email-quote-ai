@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { calculateTransloadingCost } from "@/business/pricing";
+import {
+	calculateTransloadingCost,
+	calculateDrayagePricing,
+} from "@/business/pricing";
 import PricingBreakdownTable, {
 	PricingQuote,
 } from "@/components/PricingBreakdownTable";
@@ -8,6 +11,7 @@ import {
 	getPricingJsonString,
 	PRICING_TERMS_NAME,
 } from "@/business/pricing-data";
+import { Badge } from "@/components/ui/badge";
 
 export const revalidate = 0;
 
@@ -29,22 +33,28 @@ export default async function AiInspectorPage({
 		return <div className="p-8">No emails found.</div>;
 	}
 
-	// Prefer normalizedJson, fall back to inferredJson or try to derive minimal input
 	const storedNormalized = (email.normalizedJson ?? email.inferredJson) as any;
+	const serviceType =
+		storedNormalized?.serviceType || (email.quoteJson as any)?.serviceType || "transloading";
 
-	// Enforce product rule: seal and billOfLading must be true for pricing/display.
-	// Force them to true unconditionally so older records with explicit false are corrected for presentation and pricing.
-	const normalized = {
-		...storedNormalized,
-		seal: true,
-		billOfLading: true,
-	};
+	const normalized =
+		serviceType === "drayage"
+			? storedNormalized || {}
+			: {
+					...storedNormalized,
+					seal: true,
+					billOfLading: true,
+			  };
 
 	let computed: any = null;
 	let computeError: string | null = null;
 	try {
 		if (normalized && typeof normalized === "object") {
-			computed = calculateTransloadingCost(normalized as any);
+			if (serviceType === "drayage" && normalized?.drayage) {
+				computed = calculateDrayagePricing(normalized.drayage);
+			} else {
+				computed = calculateTransloadingCost(normalized as any);
+			}
 		} else {
 			computeError = "No normalized input available to compute pricing.";
 		}
@@ -53,6 +63,10 @@ export default async function AiInspectorPage({
 	}
 
 	const quote = (email.quoteJson ?? null) as PricingQuote | null;
+	const drayageMeta =
+		(serviceType === "drayage" && (quote as any)?.metadata) ||
+		normalized?.drayage ||
+		null;
 	const { body: quoteBody, pricingNote } = splitAiQuoteResponse(email.aiResponse);
 	const pricingTermsJson = getPricingJsonString();
 
@@ -61,14 +75,26 @@ export default async function AiInspectorPage({
 		<div className="p-8 overflow-y-auto h-full">
 			<h1 className="text-2xl font-bold mb-4">AI Breakdown</h1>
 
-			<div className="mb-6">
-				<div className="font-medium">Email</div>
-				<div className="mt-2 p-3 bg-white border rounded">
+			<div className="mb-6 space-y-3">
+				<div className="font-medium flex items-center gap-2">
+					Email <Badge variant={serviceType === "drayage" ? "default" : "outline"}>{serviceType}</Badge>
+				</div>
+				<div className="p-3 bg-white border rounded">
 					<div className="text-sm font-medium">Subject</div>
 					<div className="text-sm text-gray-700">{email.subject || "(no subject)"}</div>
 					<div className="text-sm font-medium mt-2">From</div>
 					<div className="text-sm text-gray-700">{email.senderEmail || email.senderName || "unknown"}</div>
 				</div>
+				{serviceType === "drayage" && drayageMeta && (
+					<div className="p-3 bg-blue-50 border border-blue-100 rounded text-sm grid grid-cols-1 sm:grid-cols-2 gap-2">
+						<Info label="Container">{drayageMeta.containerSize || drayageMeta.container_size || "—"}</Info>
+						<Info label="Weight (lbs)">{drayageMeta.containerWeightLbs || drayageMeta.container_weight_lbs || "—"}</Info>
+						<Info label="Miles">{drayageMeta.miles || drayageMeta.miles_to_travel || "—"}</Info>
+						<Info label="Ship-by">{drayageMeta.shipByDate || drayageMeta.ship_by_date || drayageMeta.requested_ship_by || "—"}</Info>
+						<Info label="Origin">{drayageMeta.origin || drayageMeta.origin_city || "—"}</Info>
+						<Info label="Destination">{drayageMeta.destination || drayageMeta.destination_city || "—"}</Info>
+					</div>
+				)}
 			</div>
 
 			<div className="mb-6">
@@ -105,14 +131,25 @@ export default async function AiInspectorPage({
 				<div className="mt-4">
 					<div className="font-medium text-sm mb-2">Pricing summary</div>
 					<PricingBreakdownTable quote={quote} note={pricingNote} />
-					<div className="mt-4">
-						<div className="font-medium text-sm mb-2">{PRICING_TERMS_NAME}</div>
-						<pre className="bg-gray-50 p-3 rounded text-xs whitespace-pre-wrap max-h-[30vh] overflow-auto">
-							{pricingTermsJson}
-						</pre>
-					</div>
+					{serviceType !== "drayage" && (
+						<div className="mt-4">
+							<div className="font-medium text-sm mb-2">{PRICING_TERMS_NAME}</div>
+							<pre className="bg-gray-50 p-3 rounded text-xs whitespace-pre-wrap max-h-[30vh] overflow-auto">
+								{pricingTermsJson}
+							</pre>
+						</div>
+					)}
 				</div>
 			</div>
+		</div>
+	);
+}
+
+function Info({ label, children }: { label: string; children: React.ReactNode }) {
+	return (
+		<div className="flex flex-col text-blue-900">
+			<span className="text-xs uppercase text-blue-700 font-semibold">{label}</span>
+			<span>{children}</span>
 		</div>
 	);
 }
